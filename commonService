@@ -1,0 +1,1214 @@
+package com.peoplehum.competencyManagement.v1.service.impl;
+
+import com.nethum.datetime.service.DateTimeUtility;
+import com.nethum.onboarding.api.v3.model.customer.JobFunction;
+import com.nethum.onboarding.api.v3.model.user.UserModel;
+import com.nethum.onboarding.api.v4.model.BasicIdentityModel;
+import com.peoplehum.competencyManagement.common.exception.CompetencyMgmtException;
+import com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode;
+import com.peoplehum.competencyManagement.common.model.CompetencyMgmtResponseObject;
+import com.peoplehum.competencyManagement.common.model.RequestContext;
+import com.peoplehum.competencyManagement.common.model.SearchFilter;
+import com.peoplehum.competencyManagement.common.util.FinanceRestUtility;
+import com.peoplehum.competencyManagement.common.util.GenericUtility;
+import com.peoplehum.competencyManagement.common.util.OnboardingRestUtility;
+import com.peoplehum.competencyManagement.common.util.RedisUtility;
+import com.peoplehum.competencyManagement.common.util.RequestContextUtility;
+import com.peoplehum.competencyManagement.common.util.ValidationUtility;
+import com.peoplehum.competencyManagement.v1.constants.GenericConstant;
+import com.peoplehum.competencyManagement.v1.entity.Competency;
+import com.peoplehum.competencyManagement.v1.entity.CompetencyApplicability;
+import com.peoplehum.competencyManagement.v1.entity.CompetencyGroup;
+import com.peoplehum.competencyManagement.v1.entity.CompetencyPaygrade;
+import com.peoplehum.competencyManagement.v1.entity.RatingQuestion;
+import com.peoplehum.competencyManagement.v1.entity.TestSetting;
+import com.peoplehum.competencyManagement.v1.enums.ApplicabilityType;
+import com.peoplehum.competencyManagement.v1.enums.CompetencyStatus;
+import com.peoplehum.competencyManagement.v1.enums.EditStatus;
+import com.peoplehum.competencyManagement.v1.model.ApplicabilityModel;
+import com.peoplehum.competencyManagement.v1.model.AssignCompetencyModel;
+import com.peoplehum.competencyManagement.v1.model.CompetencyGroupModel;
+import com.peoplehum.competencyManagement.v1.model.CompetencyModel;
+import com.peoplehum.competencyManagement.v1.model.CompetencySnapshot;
+import com.peoplehum.competencyManagement.v1.model.CompetencySnapshotModel;
+import com.peoplehum.competencyManagement.v1.model.RatingQuestionModel;
+import com.peoplehum.competencyManagement.v1.model.TestSettingsModel;
+import com.peoplehum.competencyManagement.v1.repository.CompetencyRepository;
+import com.peoplehum.competencyManagement.v1.service.CommonCompetencyService;
+import com.peoplehum.competencyManagement.v1.service.CompetencyApplicabilityService;
+import com.peoplehum.competencyManagement.v1.service.CompetencyGroupService;
+import com.peoplehum.competencyManagement.v1.service.CompetencyPaygradeService;
+import com.peoplehum.competencyManagement.v1.service.CompetencyService;
+import com.peoplehum.competencyManagement.v1.service.RatingQuestionService;
+import com.peoplehum.competencyManagement.v1.service.TestSettingsService;
+import com.peoplehum.competencyManagement.v1.utils.ComputeLayerUtility;
+import com.peoplehum.competencyManagement.v1.utils.ModelAdapter;
+import com.peoplehum.finance.v1.model.PayGradeModel;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.collections4.MapUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.velocity.VelocityContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.DATA_VALIDATION_FAILED;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.DUPLICATE_COMPETENCY;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.DUPLICATE_COMPETENCY_GROUP_NAME;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.DUPLICATE_COMPETENCY_NAME;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.GROUP_NAME_IN_USE;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.INVALID_CUSTOMER_SCOPE;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.PROCESSING_ERROR;
+import static com.peoplehum.competencyManagement.common.model.CompetencyManagementStatusCode.SUCCESS;
+import static com.peoplehum.competencyManagement.v1.constants.GenericConstant.COMPETENCY_ID;
+import static com.peoplehum.competencyManagement.v1.constants.GenericConstant.LONG_ZERO;
+import static com.peoplehum.competencyManagement.v1.constants.GenericConstant.UNDERSCORE;
+
+@Slf4j
+@Service("com.peoplehum.competencyManagement.v1.service.impl.CommonCompetencyServiceImpl")
+public class CommonCompetencyServiceImpl implements CommonCompetencyService {
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.service.impl.CompetencyGroupServiceImpl")
+  private CompetencyGroupService competencyGroupService;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.service.impl.CompetencyServiceImpl")
+  private CompetencyService competencyService;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.service.impl.RatingQuestionServiceImpl")
+  private RatingQuestionService ratingQuestionService;
+
+  @Autowired
+  @Qualifier(
+      "com.peoplehum.competencyManagement.v1.service.impl.CompetencyApplicabilityServiceImpl")
+  private CompetencyApplicabilityService competencyApplicabilityService;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.service.impl.CompetencyPaygradeServiceImpl")
+  private CompetencyPaygradeService competencyPaygradeService;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.service.impl.TestSettingsServiceImpl")
+  private TestSettingsService testSettingsService;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.common.util.FinanceRestUtility")
+  private FinanceRestUtility financeRestUtility;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.common.util.OnboardingRestUtility")
+  private OnboardingRestUtility onboardingRestUtility;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.common.util.RequestContextUtility")
+  private RequestContextUtility requestContextUtility;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.common.util.GenericUtility")
+  private GenericUtility genericUtility;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.utils.ModelAdapter")
+  private ModelAdapter modelAdapter;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.v1.utils.ComputeLayerUtility")
+  ComputeLayerUtility computeLayerUtility;
+
+  @Autowired
+  @Qualifier("com.peoplehum.competencyManagement.common.util.RedisUtility")
+  private RedisUtility redisUtility;
+
+  private static final String COMPETENCY_DETAIL_REDIS_KEY = "competency_{0}";
+
+  @Override
+  public CompetencyMgmtResponseObject<List<CompetencyGroupModel>> findAllByCompetencyGroupCustomerId(
+      Long customerId) {
+    log.info("Getting list of Competency Group. CustomerId: {}", customerId);
+    CompetencyMgmtResponseObject<List<CompetencyGroupModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+
+    List<CompetencyGroup> competencyGroups = competencyGroupService.findAllByCustomerId(customerId);
+    List<CompetencyGroupModel> responseList =
+        modelAdapter.getModelFromCompetencyGroupEntity(competencyGroups);
+
+    responseObject.setResponseObject(responseList);
+    responseObject.setStatus(SUCCESS);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  private void logResponseInDebug(Object response, CompetencyManagementStatusCode statusCode) {
+    log.debug("Response is : {}, \nStatus Code: {}", response, statusCode);
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Page<CompetencyModel>> findAllCompetenciesByCustomerIdAndStatusAndCompetencyName(
+      Long customerId, CompetencyStatus status, String competencyName, Pageable pageable) {
+    log.info(
+        "Getting list of Competencies by Search String. CustomerId: {}, CompetencyName: {}, Page "
+            + "Request: {}",
+        customerId, competencyName, pageable);
+    CompetencyMgmtResponseObject<Page<CompetencyModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    Page<Competency> competencyPage = competencyService
+        .findAllByCustomerIdAndStatusAndCompetencyNameContainingIgnoreCase(customerId, status,
+            competencyName, pageable);
+    List<CompetencyModel> competencies = new ArrayList<>();
+    if (null != competencyPage && competencyPage.getTotalElements() > 0) {
+      competencyPage.getContent().forEach(competency -> {
+        CompetencyModel competencyModel =
+            modelAdapter.getBasicCompetencyModelFromEntity(competency);
+        competencies.add(competencyModel);
+      });
+    }
+    responseObject.setResponseObject(new PageImpl<>(competencies, pageable,
+        null == competencyPage ? 0 : competencyPage.getTotalElements()));
+    responseObject.setStatus(SUCCESS);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Boolean> findCompetencyByCustomerIdAndNameContainingIgnoreCase(
+      RequestContext requestContext, String competencyName) {
+    log.info(
+        "Got the request to get competency by customerId and Name. RequestContext: {}, Competency"
+            + " Name: {}",
+        requestContext, competencyName);
+    CompetencyMgmtResponseObject<Boolean> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    List<Competency> competencies = competencyService
+        .findByCustomerIdAndCompetencyNameIgnoreCase(requestContext.getCustomerId(),
+            competencyName);
+    Boolean response = CollectionUtils.isNotEmpty(competencies);
+    responseObject.setResponseObject(response);
+    responseObject.setStatus(SUCCESS);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<List<CompetencyModel>> findCompetencyByIds(
+      RequestContext requestContext, List<Long> ids) {
+    log.info("Got the request to find list of competencies by id. Request Context: {}, Ids: {}",
+        requestContext, ids);
+    CompetencyMgmtResponseObject<List<CompetencyModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    List<Competency> competencies =
+        competencyService.findByCustomerIdAndIdIn(requestContext.getCustomerId(), ids);
+    if (CollectionUtils.isEmpty(competencies)) {
+      responseObject.setStatus(DATA_VALIDATION_FAILED);
+    } else {
+      responseObject.setStatus(SUCCESS);
+      responseObject.setResponseObject(competencies.stream().map(
+              competency -> new CompetencyModel(competency.getId(),
+                  competency.getCompetencyGroupId(),
+                  competency.getCompetencyName(), competency.getFeedbackQuestionScale()))
+          .collect(Collectors.toList()));
+    }
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<CompetencyGroupModel> upsertCompetencyGroup(
+      RequestContext requestContext, CompetencyGroupModel competencyGroupModel) {
+    log.info(
+        "Got the request to Upsert the Competency Group. Request Context: {}, "
+            + "CompetencyGroupModel: {}",
+        requestContext, competencyGroupModel);
+    CompetencyMgmtResponseObject<CompetencyGroupModel> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+
+    if (null != competencyGroupModel && StringUtils
+        .isNotEmpty(competencyGroupModel.getGroupName())) {
+
+      CompetencyGroup existingGroup = competencyGroupService
+          .findByCustomerIdAndGroupName(requestContext.getCustomerId(),
+              competencyGroupModel.getGroupName());
+
+      log.info(
+          "Competency Group Found with the name. RequestContext: {}, Group Name:{}, Groups Found:"
+              + " {}",
+          requestContext, competencyGroupModel.getGroupName(), existingGroup);
+      if (Objects.isNull(existingGroup)) {
+        CompetencyGroup competencyGroup = null;
+        if (null == competencyGroupModel.getId()) {
+          competencyGroup = CompetencyGroup.builder().customerId(requestContext.getCustomerId())
+              .groupName(competencyGroupModel.getGroupName())
+              .createdBy(requestContext.getSignedInUserId())
+              .createdOn(DateTimeUtility.getCurrentTimestampInUTC())
+              .updatedBy(requestContext.getSignedInUserId())
+              .updatedOn(DateTimeUtility.getCurrentTimestampInUTC()).build();
+
+        } else {
+          competencyGroup = competencyGroupService
+              .findByCustomerIdAndId(requestContext.getCustomerId(), competencyGroupModel.getId());
+          competencyGroup.setGroupName(competencyGroupModel.getGroupName());
+        }
+        competencyGroup = competencyGroupService.save(competencyGroup);
+        competencyGroupModel.setId(competencyGroup.getId());
+        responseObject.setStatus(SUCCESS);
+      } else {
+        competencyGroupModel.setId(existingGroup.getId());
+        responseObject.setStatus(DUPLICATE_COMPETENCY_GROUP_NAME);
+      }
+    }
+
+    responseObject.setResponseObject(competencyGroupModel);
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<List<CompetencyGroupModel>> findCompetencyGroupById(
+      RequestContext requestContext, List<Long> ids) {
+    log.info("Got the request to find Competency Group By Id. Request Context: {}, Ids: {}",
+        requestContext, ids);
+    CompetencyMgmtResponseObject responseObject =
+        new CompetencyMgmtResponseObject(PROCESSING_ERROR);
+    List<CompetencyGroup> competencyGroups =
+        competencyGroupService.findByCustomerIdAndIdIn(requestContext.getCustomerId(), ids);
+    if (CollectionUtils.isEmpty(competencyGroups)) {
+      responseObject.setStatus(DATA_VALIDATION_FAILED);
+    } else {
+      responseObject
+          .setResponseObject(modelAdapter.getModelFromCompetencyGroupEntity(competencyGroups));
+      responseObject.setStatus(SUCCESS);
+    }
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Long> deleteByCustomerIdAndId(RequestContext requestContext,
+      Long groupId) {
+    CompetencyMgmtResponseObject<Long> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    log.info("Got the request to Delete Group By CustomerId: {} And Id: {}", requestContext,
+        groupId);
+    CompetencyGroup group =
+        competencyGroupService.findByCustomerIdAndId(requestContext.getCustomerId(), groupId);
+    if (!Objects.isNull(group)) {
+      List<Competency> linkedCompetency = competencyService
+          .findByCustomerIdAndCompetencyGroupId(requestContext.getCustomerId(), groupId);
+      log.info("There are a few Competencies: {} associated with the provided group.",
+          linkedCompetency);
+      if (CollectionUtils.isNotEmpty(linkedCompetency)) {
+        responseObject.setStatus(GROUP_NAME_IN_USE);
+      } else {
+        log.debug("Successfully deleted the competency group with id: {}", groupId);
+        responseObject.setStatus(SUCCESS);
+        competencyGroupService.deleteCompetencyGroup(group);
+      }
+    } else {
+      log.error("No Competency Group found for the Customer: {}, Group Id: {}", requestContext,
+          groupId);
+      responseObject.setStatus(DATA_VALIDATION_FAILED);
+    }
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Page<CompetencyModel>> findPageableCompetencyListForCustomer(
+      RequestContext requestContext, SearchFilter searchFilter, Pageable pageable) {
+    CompetencyMgmtResponseObject<Page<CompetencyModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    log.info(
+        "Got the request to get Pageable Competency List for the Customer. Request Context: {}, "
+            + "Search Filter: {}, "
+            + "Page Request: {}", requestContext, searchFilter, pageable);
+    UserModel loggedInUserModel =
+        onboardingRestUtility.getBasicUserInfo(requestContext, requestContext.getSignedInUserId());
+    String timeZone =
+        (null == loggedInUserModel) ? StringUtils.EMPTY : loggedInUserModel.getTimeZone();
+    searchFilter.setUpdatedOnFrom(requestContextUtility
+        .convertLongToTimeForFilter(searchFilter.getUpdatedOnFromLong(), true, timeZone));
+    searchFilter.setUpdatedOnTo(requestContextUtility
+        .convertLongToTimeForFilter(searchFilter.getUpdatedOnToLong(), false, timeZone));
+    Page<Competency> competencyPage = competencyService
+        .findAllByCustomerId(requestContext.getCustomerId(), searchFilter, pageable);
+    List<CompetencyModel> competencies = new ArrayList<>();
+    if (null != competencyPage && competencyPage.getTotalElements() > 0) {
+      Map<Long, BasicIdentityModel> userModelMap = new HashMap<>();
+      Map<Long, CompetencyGroup> competencyGroupMap =
+          getCompetencyGroupsForCustomer(requestContext);
+      Map<Long, PayGradeModel> payGradeModelMap = getPayGradeConfiguredForCustomer(requestContext);
+      Map<Long, JobFunction> configuredJobFunctions = getJobFunctionsForCustomer(requestContext);
+      log.debug(
+          "Competencies found : {}, Competency Groups: {}, Configured Paygrades: {}, Configured "
+              + "Job Functions: {}",
+          competencyPage, competencyGroupMap, payGradeModelMap, configuredJobFunctions);
+      competencyPage.getContent().forEach(competency -> {
+        CompetencyModel competencyModel =
+            modelAdapter.getBasicCompetencyModelFromEntity(competency);
+        Long userId = competency.getUpdatedBy();
+        if (!userModelMap.containsKey(userId)) {
+          userModelMap.put(userId, new BasicIdentityModel());
+        }
+        competencyModel.setModifiedBy(userModelMap.get(userId));
+        Long groupId = competency.getCompetencyGroupId();
+        if (competencyGroupMap.containsKey(groupId)) {
+          competencyModel.setCompetencyGroupName(competencyGroupMap.get(groupId).getGroupName());
+        }
+
+        List<CompetencyApplicability> competencyApplicabilityList =
+            competency.getCompetencyApplicabilityList();
+        if (CollectionUtils.isNotEmpty(competencyApplicabilityList)) {
+          competencyModel.setCompetencyApplicabilities(modelAdapter
+              .constructCompetencyApplicabilityFromListOfEntities(requestContext,
+                  competencyApplicabilityList, payGradeModelMap, configuredJobFunctions));
+        }
+        competencies.add(competencyModel);
+      });
+
+      if (MapUtils.isNotEmpty(userModelMap)) {
+        List<UserModel> userModelList = onboardingRestUtility
+            .getBasicUserInfoList(requestContext, new ArrayList<>(userModelMap.keySet()),
+                Boolean.TRUE);
+
+        if (CollectionUtils.isNotEmpty(userModelList)) {
+          for (UserModel userModel : userModelList) {
+            BasicIdentityModel identityModel = userModelMap.get(userModel.getUserId());
+            genericUtility.setBasicIdentityModel(identityModel, userModel);
+          }
+        }
+      }
+    }
+    responseObject.setResponseObject(new PageImpl<>(competencies, pageable,
+        null == competencyPage ? 0 : competencyPage.getTotalElements()));
+    responseObject.setStatus(SUCCESS);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  private Map<Long, CompetencyGroup> getCompetencyGroupsForCustomer(RequestContext requestContext) {
+    log.info("Getting the Competency Groups for Customer. Request Context: {}", requestContext);
+    Map<Long, CompetencyGroup> responseMap = new HashMap<>();
+    List<CompetencyGroup> competencyGroups =
+        competencyGroupService.findAllByCustomerId(requestContext.getCustomerId());
+    if (CollectionUtils.isNotEmpty(competencyGroups)) {
+      competencyGroups
+          .forEach(competencyGroup -> responseMap.put(competencyGroup.getId(), competencyGroup));
+    }
+    logResponseInDebug(responseMap, SUCCESS);
+    return responseMap;
+  }
+
+  private Map<Long, PayGradeModel> getPayGradeConfiguredForCustomer(RequestContext requestContext) {
+    log.info("getting the Configured Paygrade for Customer. {}", requestContext);
+    Map<Long, PayGradeModel> returnMap = new HashMap<>();
+    List<PayGradeModel> payGradeModels = financeRestUtility.getPayGradeForCustomer(requestContext);
+    if (CollectionUtils.isNotEmpty(payGradeModels)) {
+      payGradeModels.forEach(payGradeModel -> returnMap.put(payGradeModel.getId(), payGradeModel));
+    }
+    returnMap.put(LONG_ZERO, new PayGradeModel(LONG_ZERO, GenericConstant.PAYGRADE_ALL, null));
+    logResponseInDebug(returnMap, SUCCESS);
+    return returnMap;
+  }
+
+  private Map<Long, JobFunction> getJobFunctionsForCustomer(RequestContext requestContext) {
+    log.info("Getting the Job Functions for Customer. {}", requestContext);
+    Map<Long, JobFunction> returnMap = new HashMap<>();
+    List<JobFunction> jobFunctions = onboardingRestUtility.getJobFunctionOfCustomer(requestContext);
+    if (CollectionUtils.isNotEmpty(jobFunctions)) {
+      jobFunctions.forEach(jobFunction -> returnMap.put(jobFunction.getId(), jobFunction));
+    }
+    logResponseInDebug(returnMap, SUCCESS);
+    return returnMap;
+  }
+
+  @Override
+  @Transactional
+  public CompetencyMgmtResponseObject<CompetencyModel> upsertCompetency(
+      RequestContext requestContext, CompetencyModel competencyModel) {
+    log.info("Got the request to Upsert Competency. Request Context: {}, Competency Model: {}",
+        requestContext, competencyModel);
+    CompetencyMgmtResponseObject<CompetencyModel> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    CompetencyManagementStatusCode responseCode = competencyModel.validate();
+    if (SUCCESS.equals(responseCode)) {
+      switch (competencyModel.getStatus()) {
+        case ACTIVE:
+          responseCode =
+              publishCompetency(requestContext, competencyModel, responseObject);
+          break;
+        case DRAFT:
+          responseCode =
+              draftCompetency(requestContext, competencyModel, responseObject);
+          break;
+        default:
+          log.debug("Invalid status: {} with RequestContext: {}, CompetencyModel: {}",
+              competencyModel.getStatus(), requestContext, competencyModel);
+          responseCode = DATA_VALIDATION_FAILED;
+      }
+    }
+    responseObject.setStatus(responseCode);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  private CompetencyManagementStatusCode draftCompetency(RequestContext requestContext,
+      CompetencyModel competencyModel,
+      CompetencyMgmtResponseObject<CompetencyModel> responseObject) {
+    CompetencyManagementStatusCode responseCode = SUCCESS;
+    List<Competency> competenciesWithSameName =
+        competencyService.findByCustomerIdAndStatusNotAndCompetencyNameIgnoreCase(
+            requestContext.getCustomerId(), CompetencyStatus.INACTIVE,
+            competencyModel.getCompetencyName());
+
+    Boolean competencyWithSameNameExists =
+        isCompetencyWithSameNameExist(competenciesWithSameName, competencyModel);
+
+    if (competencyWithSameNameExists) {
+      log.info("There already is a competency with the same name: {}, hence not updating the "
+          + "competency.", competencyModel.getCompetencyName());
+      responseCode = DUPLICATE_COMPETENCY_NAME;
+    } else {
+      Competency competency = upsertCompetency(competencyModel, requestContext);
+      if (CollectionUtils.isNotEmpty(competencyModel.getCompetencyApplicabilities())) {
+        responseCode = ValidationUtility.getApplicabilityValidation(
+            competencyModel.getCompetencyApplicabilities());
+        upsertCompetencyApplicability(competency.getId(),
+            competencyModel.getCompetencyApplicabilities(), requestContext);
+      }
+      competencyModel.setId(competency.getId());
+      competencyModel.setCustomerId(requestContext.getCustomerId());
+      responseObject.setResponseObject(competencyModel);
+      TestSettingsModel testSettingsModel = upsertTestSetting(competencyModel);
+      responseObject.getResponseObject().setTestSettingModel(testSettingsModel);
+      upsertRatingQuestions(competencyModel, requestContext);
+    }
+    return responseCode;
+  }
+
+  private CompetencyManagementStatusCode publishCompetency(
+      RequestContext requestContext, CompetencyModel competencyModel,
+      CompetencyMgmtResponseObject<CompetencyModel> responseObject) {
+    CompetencyManagementStatusCode responseCode = SUCCESS;
+    if (Objects.isNull(competencyModel.getTestSettingModel()) && CollectionUtils.isEmpty(
+        competencyModel.getRatingQuestionModels())) {
+      responseCode = DATA_VALIDATION_FAILED;
+      log.error("Competency Model Validation Failed. Response Code: {}", responseCode);
+    }
+    if (SUCCESS.equals(responseCode) && null != competencyModel.getTestSettingModel()) {
+      responseCode = competencyModel.getTestSettingModel().validate();
+      log.info("Test setting model Validation response : {}", responseCode);
+    }
+    if (SUCCESS.equals(responseCode)) {
+      responseCode = ValidationUtility.getApplicabilityValidation(
+          competencyModel.getCompetencyApplicabilities());
+      log.info("Competency Applicability Validation Response : {}", responseCode);
+    }
+    if (SUCCESS.equals(responseCode)) {
+      List<Competency> competenciesWithSameName =
+          competencyService.findByCustomerIdAndStatusNotAndCompetencyNameIgnoreCase(
+              requestContext.getCustomerId(), CompetencyStatus.INACTIVE,
+              competencyModel.getCompetencyName());
+
+      Boolean competencyWithSameNameExists =
+          isCompetencyWithSameNameExist(competenciesWithSameName, competencyModel);
+
+      if (competencyWithSameNameExists) {
+        log.info("There already is a competency with the same name: {}, hence not updating the "
+            + "competency.", competencyModel.getCompetencyName());
+        responseCode = DUPLICATE_COMPETENCY_NAME;
+      } else {
+        Competency competency = upsertCompetency(competencyModel, requestContext);
+        upsertCompetencyApplicability(competency.getId(),
+            competencyModel.getCompetencyApplicabilities(), requestContext);
+        competencyModel.setId(competency.getId());
+        competencyModel.setCustomerId(requestContext.getCustomerId());
+        responseObject.setResponseObject(competencyModel);
+        TestSettingsModel testSettingsModel = upsertTestSetting(competencyModel);
+        responseObject.getResponseObject().setTestSettingModel(testSettingsModel);
+        upsertRatingQuestions(competencyModel, requestContext);
+      }
+    }
+    return responseCode;
+  }
+
+  private Boolean isCompetencyWithSameNameExist(List<Competency> competenciesWithSameName,
+      CompetencyModel competencyModel) {
+    Boolean competencyWithSameNameExists = Boolean.FALSE;
+    if (CollectionUtils.isNotEmpty(competenciesWithSameName)) {
+      if (null == competencyModel.getId()) {
+        competencyWithSameNameExists = Boolean.TRUE;
+      } else {
+        for (Competency competency : competenciesWithSameName) {
+          if (!competencyModel.getId().equals(competency.getId())) {
+            competencyWithSameNameExists = Boolean.TRUE;
+            break;
+          }
+        }
+      }
+    }
+    return competencyWithSameNameExists;
+  }
+
+  private Competency upsertCompetency(CompetencyModel competencyModel,
+      RequestContext requestContext) {
+    Competency competencyEntity = null;
+    if (null == competencyModel.getId()) {
+      competencyEntity =
+          modelAdapter.getCompetencyEntityFromModel(competencyModel, null, requestContext);
+    } else {
+      competencyEntity = modelAdapter.getCompetencyEntityFromModel(competencyModel,
+          competencyService
+              .findByCustomerIdAndId(requestContext.getCustomerId(), competencyModel.getId()),
+          requestContext);
+    }
+    competencyEntity = competencyService.save(competencyEntity);
+    return competencyEntity;
+  }
+
+  private TestSettingsModel upsertTestSetting(CompetencyModel competencyModel) {
+    TestSetting testSetting = testSettingsService
+        .findByCustomerIdAndCompetencyId(competencyModel.getCustomerId(), competencyModel.getId());
+    TestSettingsModel testSettingsModel = competencyModel.getTestSettingModel();
+    if (null != testSettingsModel) {
+      testSettingsModel.setCompetencyId(competencyModel.getId());
+      testSettingsModel.setCustomerId(competencyModel.getCustomerId());
+      if (null != testSetting) {
+        testSettingsModel.setId(testSetting.getId());
+      }
+      testSetting = testSettingsService
+          .save(modelAdapter.constructTestSettingEntityFromModel(testSettingsModel));
+      testSettingsModel.setId(testSetting.getId());
+    }
+    return testSettingsModel;
+  }
+
+  private void upsertRatingQuestions(CompetencyModel competencyModel,
+      RequestContext requestContext) {
+    List<RatingQuestionModel> ratingQuestionModels = competencyModel.getRatingQuestionModels();
+    if (CollectionUtils.isNotEmpty(ratingQuestionModels)) {
+      Map<Long, RatingQuestionModel> ratingQuestionModelMap = new HashMap<>();
+      List<RatingQuestion> ratingQuestions = new ArrayList<>(ratingQuestionModels.size());
+      for (RatingQuestionModel ratingQuestionModel : ratingQuestionModels) {
+        ratingQuestionModel.setCustomerId(competencyModel.getCustomerId());
+        ratingQuestionModel.setCompetencyId(competencyModel.getId());
+        if (null != ratingQuestionModel.getId()) {
+          ratingQuestionModelMap.put(ratingQuestionModel.getId(), ratingQuestionModel);
+        } else {
+          ratingQuestions.add(modelAdapter
+              .getEntityFromRatingQuestionModel(ratingQuestionModel, null, requestContext));
+        }
+      }
+      if (MapUtils.isNotEmpty(ratingQuestionModelMap)) {
+        List<Long> ratingQuestionsToNotDelete = new ArrayList<>();
+        List<RatingQuestion> ratingQuestionList = ratingQuestionService
+            .findByCustomerIdAndIdIn(requestContext.getCustomerId(),
+                ratingQuestionModelMap.keySet());
+        ratingQuestionList.forEach(ratingQuestion -> {
+          if (null != ratingQuestion.getId()) {
+            ratingQuestionsToNotDelete.add(ratingQuestion.getId());
+          }
+          ratingQuestions.add(modelAdapter
+              .getEntityFromRatingQuestionModel(ratingQuestionModelMap.get(ratingQuestion.getId()),
+                  ratingQuestion, requestContext));
+        });
+        if (CollectionUtils.isNotEmpty(ratingQuestionsToNotDelete)) {
+          ratingQuestionService
+              .deleteByCustomerIdAndCompetencyIdAndIdNotIn(requestContext.getCustomerId(),
+                  competencyModel.getId(), ratingQuestionsToNotDelete);
+        }
+      } else {
+        ratingQuestionService.deleteByCustomerIdAndCompetencyId(requestContext.getCustomerId(),
+            competencyModel.getId());
+      }
+      ratingQuestionService.saveAll(ratingQuestions);
+    }
+  }
+
+  private void upsertCompetencyApplicability(Long competencyId,
+      List<ApplicabilityModel> applicabilityModels, RequestContext requestContext) {
+    if (CollectionUtils.isEmpty(applicabilityModels)) {
+      return;
+    }
+    List<CompetencyApplicability> applicabilitiesToAdd = new ArrayList<>();
+    List<Long> competenciesToDelete = new ArrayList<>();
+    List<Long> competenciesToEdit = new ArrayList<>();
+    Map<Long, ApplicabilityModel> applicabilityModelMap = new HashMap<>();
+    applicabilityModels.forEach(applicabilityModel -> {
+      if (null == applicabilityModel.getEditStatus()) {
+        return;
+      }
+      switch (applicabilityModel.getEditStatus()) {
+        case ADDED:
+          applicabilityModel.setCompetencyId(competencyId);
+          CompetencyApplicability applicability = (modelAdapter
+              .getEntityFromCompetencyApplicabilityModel(applicabilityModel, null, requestContext));
+
+          List<Long> payGradeIds = applicabilityModel.getPayGradeIds();
+          if (CollectionUtils.isNotEmpty(payGradeIds)) {
+            List<CompetencyPaygrade> competencyPaygrades = new ArrayList<>();
+            payGradeIds.forEach(payGradeId -> competencyPaygrades.add(
+                CompetencyPaygrade.builder().customerId(requestContext.getCustomerId())
+                    .payGradeIds(payGradeId).createdBy(requestContext.getSignedInUserId())
+                    .createdOn(DateTimeUtility.getCurrentTimestampInUTC()).build()));
+            applicability.setApplicabilityPaygrade(competencyPaygrades);
+          }
+          applicabilitiesToAdd.add(applicability);
+          break;
+        case EDITED:
+          Long id = applicabilityModel.getId();
+          competenciesToEdit.add(id);
+          applicabilityModelMap.put(id, applicabilityModel);
+          break;
+        case DELETED:
+          competenciesToDelete.add(applicabilityModel.getId());
+          break;
+        case SAVED:
+          break;
+      }
+    });
+
+    if (CollectionUtils.isNotEmpty(competenciesToDelete)) {
+      competencyPaygradeService
+          .deleteByCustomerIdAndCompetencyApplicabilityIdIn(requestContext.getCustomerId(),
+              competenciesToDelete);
+      competencyApplicabilityService
+          .deleteByCustomerIdAndIdIn(requestContext.getCustomerId(), competenciesToDelete);
+    }
+    List<CompetencyPaygrade> competencyPaygrades = new ArrayList<>();
+    List<CompetencyApplicability> applicabilitiesToEdit =
+        new ArrayList<>(competenciesToEdit.size());
+    if (CollectionUtils.isNotEmpty(competenciesToEdit)) {
+      competencyPaygradeService
+          .deleteByCustomerIdAndCompetencyApplicabilityIdIn(requestContext.getCustomerId(),
+              competenciesToEdit);
+      List<CompetencyApplicability> applicabilityEntities = competencyApplicabilityService
+          .findByCustomerIdAndIdIn(requestContext.getCustomerId(), competenciesToEdit);
+      applicabilityEntities.forEach(applicabilityEntity -> {
+        CompetencyApplicability applicability = modelAdapter
+            .getEntityFromCompetencyApplicabilityModel(
+                applicabilityModelMap.get(applicabilityEntity.getId()), applicabilityEntity,
+                requestContext);
+        applicability.setApplicabilityPaygrade(null);
+        applicabilitiesToEdit.add(applicability);
+        ApplicabilityModel payGradeModels = applicabilityModelMap.get(applicabilityEntity.getId());
+        if (null != payGradeModels && CollectionUtils.isNotEmpty(payGradeModels.getPayGradeIds())) {
+          payGradeModels.getPayGradeIds().forEach(payGradeIds -> competencyPaygrades.add(
+              CompetencyPaygrade.builder().customerId(applicabilityEntity.getCustomerId())
+                  .payGradeIds(payGradeIds).competencyApplicabilityId(applicabilityEntity.getId())
+                  .createdBy(requestContext.getSignedInUserId())
+                  .createdOn(DateTimeUtility.getCurrentTimestampInUTC())
+                  .id(applicabilityEntity.getId()).updatedBy(requestContext.getSignedInUserId())
+                  .updatedOn(DateTimeUtility.getCurrentTimestampInUTC()).build()));
+        }
+      });
+    }
+
+    if (CollectionUtils.isNotEmpty(applicabilitiesToEdit)) {
+      competencyApplicabilityService.saveAll(applicabilitiesToEdit);
+    }
+
+    if (CollectionUtils.isNotEmpty(applicabilitiesToAdd)) {
+      for (CompetencyApplicability competencyApplicability : applicabilitiesToAdd) {
+        CompetencyApplicability applicabilityEntity =
+            competencyApplicabilityService.save(competencyApplicability);
+        competencyApplicability.getApplicabilityPaygrade().forEach(paygrade -> {
+          paygrade.setCompetencyApplicabilityId(applicabilityEntity.getId());
+          competencyPaygrades.add(paygrade);
+        });
+      }
+    }
+
+    if (CollectionUtils.isNotEmpty(competencyPaygrades)) {
+      competencyPaygradeService.saveAll(competencyPaygrades);
+    }
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<CompetencySnapshotModel> getCompetencySnapshot(
+      RequestContext requestContext, Map<String, String> additionalParam) {
+    log.info("Getting the Competency Snapshot. Request Context: {}, Additional Params: {}",
+        requestContext, additionalParam);
+    CompetencyMgmtResponseObject<CompetencySnapshotModel> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    List<Competency> competencies =
+        competencyService.findAllByCustomerIdAndStatus(requestContext.getCustomerId(),
+            CompetencyStatus.ACTIVE);
+    CompetencySnapshotModel competencySnapshotModel =
+        modelAdapter.getBasicCompetencySnapshotModel(additionalParam);
+    if (CollectionUtils.isEmpty(competencies)) {
+      responseObject.setStatus(SUCCESS);
+      responseObject.setResponseObject(competencySnapshotModel);
+    } else {
+
+      Map<String, List<Competency>> applicableCompetencyMap = new HashMap<>();
+      Map<String, Double> competencyApplicabilityWeightageMap = new HashMap<>();
+      competencies.forEach(competency -> {
+        List<CompetencyApplicability> applicabilityList =
+            competency.getCompetencyApplicabilityList();
+        if (CollectionUtils.isNotEmpty(applicabilityList)) {
+          applicabilityList.forEach(competencyApplicability -> {
+            Long jobFunctionId = competencyApplicability.getJobFunctionId();
+            List<Long> payGradeIds = Collections.EMPTY_LIST;
+            if (CollectionUtils.isNotEmpty(competencyApplicability.getApplicabilityPaygrade())) {
+              payGradeIds = competencyApplicability.getApplicabilityPaygrade().stream()
+                  .map(CompetencyPaygrade::getPayGradeIds).collect(Collectors.toList());
+            }
+            payGradeIds.forEach(payGradeId -> {
+              String mapKey = applicableCompetencyKey(jobFunctionId, payGradeId);
+              List<Competency> competencyList =
+                  applicableCompetencyMap.getOrDefault(mapKey, new ArrayList<>());
+              competencyList.add(competency);
+              applicableCompetencyMap.put(mapKey, competencyList);
+              competencyApplicabilityWeightageMap.put(
+                  new StringBuilder().append(mapKey).append(UNDERSCORE).append(competency.getId())
+                      .toString(), competencyApplicability.getWeightage());
+            });
+          });
+        }
+      });
+
+      Map<Long, String> competencyGroupNameMap = new HashMap<>();
+      List<CompetencyGroup> competencyGroups =
+          competencyGroupService.findAllByCustomerId(requestContext.getCustomerId());
+      if (CollectionUtils.isNotEmpty(competencyGroups)) {
+        competencyGroupNameMap = competencyGroups.stream()
+            .collect(Collectors.toMap(CompetencyGroup::getId, CompetencyGroup::getGroupName));
+      }
+      List<RatingQuestion> ratingQuestions =
+          ratingQuestionService.findByCustomerId(requestContext.getCustomerId());
+      Map<Long, List<RatingQuestionModel>> competencyRatingQuestionMap = new HashMap<>();
+      if (CollectionUtils.isNotEmpty(ratingQuestions)) {
+        for (RatingQuestion ratingQuestion : ratingQuestions) {
+          List<RatingQuestionModel> ratingQuestionModels = competencyRatingQuestionMap
+              .getOrDefault(ratingQuestion.getCompetencyId(), new ArrayList<>());
+          ratingQuestionModels.add(modelAdapter.constructRatingQuestionFromEntity(ratingQuestion));
+          competencyRatingQuestionMap.put(ratingQuestion.getCompetencyId(), ratingQuestionModels);
+        }
+      }
+
+      List<TestSetting> testSettings =
+          testSettingsService.findByCustomerId(requestContext.getCustomerId());
+      Map<Long, TestSettingsModel> competencyTestSettingModel = new HashMap<>();
+      if (CollectionUtils.isNotEmpty(testSettings)) {
+        testSettings.forEach(testSetting -> competencyTestSettingModel
+            .put(testSetting.getCompetencyId(),
+                modelAdapter.constructTestSettingModelFromEntity(testSetting)));
+      }
+      if (MapUtils.isNotEmpty(applicableCompetencyMap)) {
+        List<CompetencySnapshot> competencySnapshots = new ArrayList<>();
+        for (Map.Entry<String, List<Competency>> entry : applicableCompetencyMap.entrySet()) {
+          String[] keys = entry.getKey().split(UNDERSCORE);
+          Long jobFunctionId = Long.valueOf(keys[0]);
+          Long payGradeId = Long.valueOf(keys[1]);
+          ApplicabilityType paygradeApplicabilityType = ApplicabilityType.CUSTOM;
+          if (LONG_ZERO.equals(payGradeId)) {
+            paygradeApplicabilityType = ApplicabilityType.ALL;
+          }
+          ApplicabilityType jobFunctionApplicabilityType = ApplicabilityType.CUSTOM;
+          if (LONG_ZERO.equals(jobFunctionId)) {
+            jobFunctionApplicabilityType = ApplicabilityType.ALL;
+          }
+          CompetencySnapshot snapshot =
+              CompetencySnapshot.builder().jobFunctionId(jobFunctionId).payGradeId(payGradeId)
+                  .applicableJobFunction(jobFunctionApplicabilityType)
+                  .applicablePayGradeLevel(paygradeApplicabilityType).build();
+
+          snapshot.setApplicableCompetency(modelAdapter.getCompetencyModelListFromEntityList(
+              applicableCompetencyKey(jobFunctionId, payGradeId), entry.getValue(),
+              competencyGroupNameMap, competencyApplicabilityWeightageMap,
+              competencyRatingQuestionMap, competencyTestSettingModel));
+
+          competencySnapshots.add(snapshot);
+        }
+
+        competencySnapshotModel.setCompetencySnapshot(competencySnapshots);
+      }
+      responseObject.setResponseObject(competencySnapshotModel);
+      responseObject.setStatus(SUCCESS);
+    }
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  private String applicableCompetencyKey(Long jobFunctionId, Long paygradeId) {
+    return new StringBuilder().append(jobFunctionId).append(UNDERSCORE).append(paygradeId)
+        .toString();
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<CompetencyModel> findCompetencyById(
+      RequestContext requestContext, Long competencyId) {
+    CompetencyMgmtResponseObject<CompetencyModel> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    Competency competency =
+        competencyService.findByCustomerIdAndId(requestContext.getCustomerId(), competencyId);
+    if (null == competency) {
+      responseObject.setStatus(INVALID_CUSTOMER_SCOPE);
+    } else {
+
+      CompetencyModel competencyModel = modelAdapter.getBasicCompetencyModelFromEntity(competency);
+
+      competencyModel.setCompetencyGroupName(
+          getCompetencyGroupName(requestContext, competency.getCompetencyGroupId()));
+      List<UserModel> auditUserModels = onboardingRestUtility.getBasicUserInfoList(requestContext,
+          Arrays.asList(competency.getUpdatedBy(), competency.getCreatedBy()), true);
+
+      if (CollectionUtils.isNotEmpty(auditUserModels)) {
+        auditUserModels.forEach(userModel -> {
+          BasicIdentityModel identityModel = new BasicIdentityModel();
+          genericUtility.setBasicIdentityModel(identityModel, userModel);
+          if (competency.getUpdatedBy().equals(userModel.getUserId())) {
+            competencyModel.setModifiedBy(identityModel);
+          }
+          if (competency.getCreatedBy().equals(userModel.getUserId())) {
+            competencyModel.setCreatedBy(identityModel);
+          }
+        });
+      }
+
+      Map<Long, PayGradeModel> configuredPaygradeMap =
+          getPayGradeConfiguredForCustomer(requestContext);
+      Map<Long, JobFunction> configuredJobFunctions = getJobFunctionsForCustomer(requestContext);
+      competencyModel.setCompetencyApplicabilities(modelAdapter
+          .constructCompetencyApplicabilityFromListOfEntities(requestContext,
+              competency.getCompetencyApplicabilityList(), configuredPaygradeMap,
+              configuredJobFunctions));
+
+      competencyModel.setRatingQuestionModels(
+          findRatingQuestionsByCustomerIdAndCompetencyId(requestContext, competencyId));
+      competencyModel.setTestSettingModel(
+          findTestTemplateModelByCustomerIdAndCompetencyId(requestContext, competencyId));
+      responseObject.setStatus(SUCCESS);
+      responseObject.setResponseObject(competencyModel);
+    }
+    return responseObject;
+  }
+
+  private String getCompetencyGroupName(RequestContext requestContext, Long groupId) {
+    String groupName = StringUtils.EMPTY;
+    if (null != groupId) {
+      CompetencyGroup competencyGroup =
+          competencyGroupService.findByCustomerIdAndId(requestContext.getCustomerId(), groupId);
+      if (null != competencyGroup) {
+        groupName = competencyGroup.getGroupName();
+      }
+    }
+    return groupName;
+  }
+
+  private List<RatingQuestionModel> findRatingQuestionsByCustomerIdAndCompetencyId(
+      RequestContext requestContext, Long competencyId) {
+    log.info(
+        "Getting the list of Rating Questions Configured for A Competency. Competency Id : {}, Request Context: {}",
+        competencyId, requestContext);
+    return modelAdapter.constructRatingQuestionsFromEntityList(ratingQuestionService
+        .findByCustomerIdAndCompetencyIdOrderByQuestionOrder(requestContext.getCustomerId(),
+            competencyId));
+  }
+
+  private TestSettingsModel findTestTemplateModelByCustomerIdAndCompetencyId(
+      RequestContext requestContext, Long competencyId) {
+    log.info(
+        "Getting the list of Test Temp Configured for A Competency. Competency Id : {}, Request Context: {}",
+        competencyId, requestContext);
+    return modelAdapter.constructTestSettingModelFromEntity(testSettingsService
+        .findByCustomerIdAndCompetencyId(requestContext.getCustomerId(), competencyId));
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<List<TestSettingsModel>> findTestSettingsOfCustomer(
+      Long customerId) {
+    CompetencyMgmtResponseObject<List<TestSettingsModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    List<TestSetting> testSettings = testSettingsService.findByCustomerId(customerId);
+    List<TestSettingsModel> testSettingsModels = new ArrayList<>();
+    for (TestSetting testSetting : testSettings) {
+      testSettingsModels.add(modelAdapter.constructTestSettingModelFromEntity(testSetting));
+    }
+    responseObject.setResponseObject(testSettingsModels);
+    responseObject.setStatus(SUCCESS);
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<AssignCompetencyModel> assignPayGradeAndJobFunctionToCompetencies(
+      RequestContext requestContext, AssignCompetencyModel assignCompetencyModel) {
+    Set<Long> competencyIds = new HashSet<>();
+    CompetencyMgmtResponseObject<AssignCompetencyModel> responseObject =
+        new CompetencyMgmtResponseObject<>();
+    Long mappedValue =
+        genericUtility.mapUnassignedValueToAll(assignCompetencyModel.getPayGradeId());
+    assignCompetencyModel.setPayGradeId(mappedValue);
+    mappedValue = genericUtility.mapUnassignedValueToAll(assignCompetencyModel.getJobFunctionId());
+    assignCompetencyModel.setJobFunctionId(mappedValue);
+    List<CompetencyApplicability> competencyApplicabilityToSave = new ArrayList<>();
+    List<CompetencyPaygrade> competencyPaygradesToSave = new ArrayList<>();
+    CompetencyManagementStatusCode statusCode;
+    assignCompetencyModel.getAssignedCompetencies().forEach(assignedCompetency -> {
+      competencyIds.add(assignedCompetency.getCompetencyId());
+    });
+    if (competencyIds.size() != assignCompetencyModel.getAssignedCompetencies().size()) {
+      statusCode = DUPLICATE_COMPETENCY;
+    } else {
+      List<CompetencyApplicability> competencyApplicabilities = competencyApplicabilityService
+          .findByCustomerIdAndCompetencyIdIn(requestContext.getSignedInCustomerId(), competencyIds);
+      statusCode = validateAssignCompetencyModel(requestContext, competencyApplicabilities,
+          assignCompetencyModel);
+    }
+    if (SUCCESS.equals(statusCode)) {
+      constructCompetencyAndApplicability(assignCompetencyModel, requestContext,
+          competencyApplicabilityToSave, competencyPaygradesToSave);
+      responseObject.setResponseObject(assignCompetencyModel);
+      if (CollectionUtils.isNotEmpty(competencyApplicabilityToSave)) {
+        competencyApplicabilityService.saveAll(competencyApplicabilityToSave);
+        for (Integer itr = 0; itr < competencyApplicabilityToSave.size(); itr++) {
+          competencyPaygradesToSave.get(itr)
+              .setCompetencyApplicabilityId(competencyApplicabilityToSave.get(itr).getId());
+        }
+        competencyPaygradeService.saveAll(competencyPaygradesToSave);
+      }
+    }
+    responseObject.setStatus(statusCode);
+    return responseObject;
+  }
+
+  /**
+   * method to delete competency based on below params
+   *
+   * @param requestContext
+   * @param competencyId
+   * @param forceDelete
+   *
+   * @return
+   */
+  @Transactional
+  @Override
+  public CompetencyMgmtResponseObject<Boolean> deleteCompetency(RequestContext requestContext,
+      Long competencyId, boolean forceDelete) {
+    log.info("CommonCompetencyServiceImpl: Request to deleteCompetency with requestContext: {}, "
+        + "competencyId: {} and forceDelete: {}", requestContext, competencyId, forceDelete);
+    CompetencyMgmtResponseObject<Boolean> responseObject = new CompetencyMgmtResponseObject<>();
+    Competency competency =
+        competencyService.findByCustomerIdAndId(requestContext.getCustomerId(), competencyId);
+    if (Objects.nonNull(competency)) {
+      VelocityContext velocityContext = new VelocityContext();
+      velocityContext.put(COMPETENCY_ID, String.valueOf(competencyId));
+      Boolean isLinked =
+          computeLayerUtility.checkIfCompetencyIsLinkedToCycle(requestContext.getCustomerId(),
+              competencyId);
+      if (!isLinked || forceDelete) {
+        competencyService.inactivateCompetency(requestContext.getCustomerId(), competencyId);
+        responseObject.setResponseObject(Boolean.TRUE);
+        responseObject.setStatus(CompetencyManagementStatusCode.SUCCESS);
+      } else {
+        log.debug("found cycles linked with competencyId: {}, " + "requestContext: {}",
+            competencyId, requestContext);
+        responseObject.setResponseObject(Boolean.FALSE);
+        responseObject.setStatus(CompetencyManagementStatusCode.COMPETENCY_ALREADY_IN_USE);
+      }
+    } else {
+      log.error("Could not find competency with competencyId: {}, requestContext: {} and "
+          + "responseObject: {}", responseObject, requestContext, competencyId);
+      throw new CompetencyMgmtException(PROCESSING_ERROR);
+    }
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Map<CompetencyStatus, Long>> getCompetencyCount(
+      RequestContext requestContext) {
+    log.info("CommonCompetencyServiceImpl: Request to getCompetencyCount with requestContext: {}",
+        requestContext);
+    CompetencyMgmtResponseObject<Map<CompetencyStatus, Long>> responseObject =
+        new CompetencyMgmtResponseObject<>(SUCCESS);
+    Set<CompetencyRepository.StatusAndCountModelInterface> categoryAndCount =
+        competencyService.countByCustomerId(requestContext.getSignedInCustomerId());
+    Map<CompetencyStatus, Long> competencyStatusAndCountMap = categoryAndCount.stream().collect(
+        Collectors.toMap(CompetencyRepository.StatusAndCountModelInterface::getStatus,
+            CompetencyRepository.StatusAndCountModelInterface::getCount));
+    filterCompetencyStatusAndCountMap(competencyStatusAndCountMap);
+    responseObject.setResponseObject(competencyStatusAndCountMap);
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<Map<Long, CompetencyGroupModel>> findCompetencyGroupByCompetencyIds(
+      RequestContext requestContext, List<Long> competencyIds) {
+    log.info("findCompetencyGroupByCompetencyIds called with requestContext: {}, competencyIds: {}",
+        requestContext, competencyIds);
+    CompetencyMgmtResponseObject<Map<Long, CompetencyGroupModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(SUCCESS);
+    List<Competency> competencies =
+        competencyService.findByCustomerIdAndIdIn(requestContext.getCustomerId(), competencyIds);
+    Set<Long> groupIds =
+        competencies.stream().map(Competency::getCompetencyGroupId).collect(Collectors.toSet());
+    List<CompetencyGroupModel> competencyGroupModels = modelAdapter
+        .getBasicModelFromCompetencyGroupEntity(competencyGroupService
+            .findByCustomerIdAndIdIn(requestContext.getCustomerId(), new ArrayList<>(groupIds)));
+    Map<Long, CompetencyGroupModel> competencyGroupModelMap = competencyGroupModels.stream()
+        .collect(Collectors.toMap(CompetencyGroupModel::getId, Function.identity()));
+    Map<Long, CompetencyGroupModel> competencyIdToGroupMap = competencies.stream().filter(
+        competency -> competencyGroupModelMap.containsKey(competency.getCompetencyGroupId()))
+        .collect(Collectors.toMap(Competency::getId,
+            competency -> competencyGroupModelMap.get(competency.getCompetencyGroupId())));
+    responseObject.setResponseObject(competencyIdToGroupMap);
+    return responseObject;
+  }
+
+  /**
+   * method to fetch competencies applicable for given job function and pay-grade
+   *
+   * @param requestContext
+   * @param jobFunctionId
+   * @param payGradeId
+   * @param queryValue
+   * @param pageable
+   *
+   * @return
+   */
+  @Override
+  public CompetencyMgmtResponseObject<Page<CompetencyModel>> fetchApplicableCompetencyListForCustomer(
+      RequestContext requestContext, Long jobFunctionId, Long payGradeId, String queryValue,
+      Pageable pageable) {
+    CompetencyMgmtResponseObject<Page<CompetencyModel>> responseObject =
+        new CompetencyMgmtResponseObject<>(PROCESSING_ERROR);
+    log.info(
+        "Got the request to get Applicable Competency List for the Customer. Request Context: {}, "
+            + "Job Function Id: {}, Pay Grade Id: {}, Query Value: {}, Page Request: {}",
+        requestContext, jobFunctionId, payGradeId, queryValue, pageable);
+    Boolean hasQueryValue = Boolean.FALSE;
+    if (StringUtils.isNotBlank(queryValue)) {
+      queryValue = queryValue.concat("%");
+      hasQueryValue = Boolean.TRUE;
+    }
+    Page<Competency> competencyPage =
+        competencyService.findAllApplicableCompetencies(requestContext.getCustomerId(),
+            jobFunctionId, payGradeId, queryValue, hasQueryValue, pageable);
+    List<CompetencyModel> competencies = new ArrayList<>();
+    if (null != competencyPage && competencyPage.getTotalElements() > 0) {
+      competencies = competencyPage.getContent().stream().map(
+              competency -> new CompetencyModel(competency.getId(),
+                  competency.getCompetencyGroupId(),
+                  competency.getCompetencyName(), competency.getFeedbackQuestionScale()))
+          .collect(Collectors.toList());
+    }
+    responseObject.setResponseObject(new PageImpl<>(competencies, pageable,
+        null == competencyPage ? 0 : competencyPage.getTotalElements()));
+    responseObject.setStatus(SUCCESS);
+    logResponseInDebug(responseObject.getResponseObject(), responseObject.getStatus());
+    return responseObject;
+  }
+
+  @Override
+  public CompetencyMgmtResponseObject<CompetencyModel> findCompetencyDetailsById(
+      RequestContext requestContext, Long competencyId) {
+    CompetencyMgmtResponseObject<CompetencyModel> responseObject =
+        new CompetencyMgmtResponseObject<>(SUCCESS);
+    log.info("Got the request to fetch competency details for requestContext: {} competencyId: {}",
+        requestContext, competencyId);
+    Competency competency =
+        competencyService.findByCustomerIdAndId(requestContext.getCustomerId(), competencyId);
+    if (Objects.nonNull(competency)) {
+      String competencyGroupName = StringUtils.EMPTY;
+      CompetencyGroup competencyGroup =
+          competencyGroupService.findByCustomerIdAndId(requestContext.getCustomerId(),
+              competency.getCompetencyGroupId());
+      if (competencyGroup != null) {
+        competencyGroupName = competencyGroup.getGroupName();
+      }
+      CompetencyModel competencyModel =
+          new CompetencyModel(competency.getId(), competency.getCompetencyName(),
+              competencyGroupName);
+      responseObject.setResponseObject(competencyModel);
+      String redisKey =
+          redisUtility.getRedisKeyForCompetencyDetailsCache(COMPETENCY_DETAIL_REDIS_KEY,
+              requestContext.getCustomerId());
+      redisUtility.cacheCompetencyDetails(requestContext.getCustomerId(), redisKey,
+          String.valueOf(competencyId), competencyModel);
+    }
+    return responseObject;
+  }
+
+  private void filterCompetencyStatusAndCountMap(
+      Map<CompetencyStatus, Long> competencyStatusAndCountMap) {
+    if (MapUtils.isEmpty(competencyStatusAndCountMap)) {
+      competencyStatusAndCountMap.put(CompetencyStatus.ACTIVE, 0L);
+      competencyStatusAndCountMap.put(CompetencyStatus.DRAFT, 0L);
+    } else {
+      if (!competencyStatusAndCountMap.containsKey(CompetencyStatus.ACTIVE)) {
+        competencyStatusAndCountMap.put(CompetencyStatus.ACTIVE, 0L);
+      }
+      if (!competencyStatusAndCountMap.containsKey(CompetencyStatus.DRAFT)) {
+        competencyStatusAndCountMap.put(CompetencyStatus.DRAFT, 0L);
+      }
+    }
+  }
+
+  private CompetencyManagementStatusCode validateAssignCompetencyModel(
+      RequestContext requestContext, List<CompetencyApplicability> competencyApplicabilities,
+      AssignCompetencyModel assignCompetencyModel) {
+    CompetencyManagementStatusCode statusCode = SUCCESS;
+    Map<Long, List<ApplicabilityModel>> competencyApplicabilityModel = new HashMap<>();
+    List<ApplicabilityModel> applicabilityModels =
+        modelAdapter.constructCompetencyApplicabilityFromListOfEntities(requestContext,
+            competencyApplicabilities, Collections.EMPTY_MAP, Collections.EMPTY_MAP);
+    assignCompetencyModel.getAssignedCompetencies().forEach(assignedCompetency -> {
+      applicabilityModels.add(ApplicabilityModel.builder()
+          .payGradeIds(Arrays.asList(assignCompetencyModel.getPayGradeId()))
+          .jobFunctionId(assignCompetencyModel.getJobFunctionId())
+          .competencyId(assignedCompetency.getCompetencyId()).editStatus(EditStatus.ADDED)
+          .weightage(assignedCompetency.getWeightage()).build());
+    });
+    applicabilityModels.forEach(applicabilityModel -> {
+      List<ApplicabilityModel> applicabilityModelList = competencyApplicabilityModel
+          .getOrDefault(applicabilityModel.getCompetencyId(), new ArrayList<>());
+      applicabilityModelList.add(applicabilityModel);
+      competencyApplicabilityModel
+          .put(applicabilityModel.getCompetencyId(), applicabilityModelList);
+    });
+    for (Map.Entry<Long, List<ApplicabilityModel>> entry : competencyApplicabilityModel
+        .entrySet()) {
+      statusCode = ValidationUtility.getApplicabilityValidation(entry.getValue());
+      if (!SUCCESS.equals(statusCode)) {
+        break;
+      }
+    }
+    return statusCode;
+  }
+
+  private void constructCompetencyAndApplicability(AssignCompetencyModel finalAssignCompetencyModel,
+      RequestContext requestContext, List<CompetencyApplicability> competencyApplicabilityToSave,
+      List<CompetencyPaygrade> competencyPaygradesToSave) {
+    finalAssignCompetencyModel.getAssignedCompetencies().forEach(competencyWeightage -> {
+      competencyPaygradesToSave.add(
+          CompetencyPaygrade.builder().customerId(requestContext.getSignedInCustomerId())
+              .payGradeIds(finalAssignCompetencyModel.getPayGradeId())
+              .createdBy(requestContext.getSignedInUserId())
+              .createdOn(DateTimeUtility.getCurrentTimestampInUTC()).build());
+      competencyApplicabilityToSave.add(
+          CompetencyApplicability.builder().customerId(requestContext.getSignedInCustomerId())
+              .competencyId(competencyWeightage.getCompetencyId())
+              .jobFunctionId(finalAssignCompetencyModel.getJobFunctionId())
+              .weightage(competencyWeightage.getWeightage())
+              .createdBy(requestContext.getSignedInUserId())
+              .createdOn(DateTimeUtility.getCurrentTimestampInUTC()).build());
+    });
+  }
+}
